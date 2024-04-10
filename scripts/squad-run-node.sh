@@ -267,6 +267,7 @@ init_dir_db-lookup() {
                                     --DiskSize 1000 --DiskType CLOUD_PREMIUM \
                                     --DiskChargePrepaid '{"Period":1,"RenewFlag":"NOTIFY_AND_MANUAL_RENEW"}' \
                                     --AutoMountConfiguration $mount_config \
+                                    --AutoVoucher True \
                                     --DiskName mvx-floater | jq '.DiskIdSet[0]'`
     CBS_ID_FLOAT="${CBS_ID_FLOAT//\"}"
     param="[\"$CBS_ID_FLOAT\"]"
@@ -304,6 +305,7 @@ cleanup() {
     echo "===== Cleaning up ====="
     if [ "{{deployment_mode}}" != "lite" ]; then
         umount $FLOAT_MOUNT_DIR
+        rm -rf $FLOAT_MOUNT_DIR
         tccli lighthouse DetachDisks --cli-unfold-argument --region $REGION --DiskIds $CBS_ID_FLOAT
         param="[\"$CBS_ID_FLOAT\"]"
         tccli lighthouse DescribeDisks --region $REGION --DiskIds $param --waiter "{'expr':'DiskSet[0].DiskState','to':'UNATTACHED'}"
