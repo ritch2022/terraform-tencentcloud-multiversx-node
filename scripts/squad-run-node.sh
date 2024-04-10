@@ -12,11 +12,11 @@ DOCKER_IMAGE_NODE_NAME_FILE=$SQUAD_BASE_DIR/.node_image_name
 KEY_DIR=/data/keys
 
 REGION=`curl http://metadata.tencentyun.com/latest/meta-data/placement/region`
+ZONE=`curl http://metadata.tencentyun.com/latest/meta-data/placement/zone`
 LH_ID={{lighthouse_id}}
 CBS_ID_0={{cbs_0}}
 CBS_ID_1={{cbs_1}}
 CBS_ID_2={{cbs_2}}
-CBS_ID_FLOAT={{cbs_float}}
 NETWORK={{network}}
 
 #
@@ -157,7 +157,6 @@ init_env_db-lookup() {
     echo "CBS_ID_0=$CBS_ID_0"
     echo "CBS_ID_1=$CBS_ID_1"
     echo "CBS_ID_2=$CBS_ID_2"
-    echo "CBS_ID_FLOAT=$CBS_ID_FLOAT"
     echo "===== ... done ====="
 }
 
@@ -262,7 +261,18 @@ init_dir_db-lookup() {
     NODE_2_DIR=$CBS_2_DIR/node-2
     META_NODE_DIR=$CBS_0_DIR/node-metachain
 
-    # create CBS
+    # create disk floater
+    mount_config="{\"InstanceId\":\"$LH_ID\",\"MountPoint\":\"$FLOAT_MOUNT_DIR\",\"FileSystemType\":\"ext4\"}"
+    CBS_ID_FLOAT=`tccli lighthouse CreateDisks --region $REGION --Zone $ZONE \
+                                    --DiskSize 1000 --DiskType CLOUD_PREMIUM \
+                                    --DiskChargePrepaid '{"Period":1,"RenewFlag":"NOTIFY_AND_MANUAL_RENEW"}' \
+                                    --AutoMountConfiguration $mount_config \
+                                    --DiskName mvx-floater | jq '.DiskIdSet[0]'`
+    CBS_ID_FLOAT="${CBS_ID_FLOAT//\"}"
+    param="[\"$CBS_ID_FLOAT\"]"
+    tccli lighthouse DescribeDisks --region $REGION --DiskIds $param --waiter "{'expr':'DiskSet[0].DiskState','to':'ATTACHED'}"
+    sleep 5 # just for safety
+    echo "CBS_ID_FLOAT=$CBS_ID_FLOAT"
 
     # attach and mount the disks
     # format
@@ -272,8 +282,6 @@ init_dir_db-lookup() {
     attach_and_mount $CBS_ID_0 $CBS_0_DIR
     attach_and_mount $CBS_ID_1 $CBS_1_DIR
     attach_and_mount $CBS_ID_2 $CBS_2_DIR
-    attach_and_mount $CBS_ID_FLOAT $FLOAT_MOUNT_DIR
-
 
     # copy key files
     mkdir -p $NODE_0_DIR/{logs,config}
@@ -296,7 +304,12 @@ cleanup() {
     echo "===== Cleaning up ====="
     if [ "{{deployment_mode}}" != "lite" ]; then
         umount $FLOAT_MOUNT_DIR
-        tccli lighthouse DetachDisks --cli-unfold-argument --region $REGION --DiskIds $CBS_ID_FLOAT || true
+        tccli lighthouse DetachDisks --cli-unfold-argument --region $REGION --DiskIds $CBS_ID_FLOAT
+        param="[\"$CBS_ID_FLOAT\"]"
+        tccli lighthouse DescribeDisks --region $REGION --DiskIds $param --waiter "{'expr':'DiskSet[0].DiskState','to':'UNATTACHED'}"
+        tccli lighthouse IsolateDisks --region $REGION --DiskIds $param
+        tccli lighthouse DescribeDisks --region $REGION --DiskIds $param --waiter "{'expr':'DiskSet[0].DiskState','to':'SHUTDOWN'}"
+        tccli lighthouse TerminateDisks --region $REGION --DiskIds $param
     fi
 
     unset TENCENTCLOUD_SECRET_ID
